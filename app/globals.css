@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f8f7f4;
+  --foreground: #1a1712;
+  --card: #ffffff;
+  --card-foreground: #1a1712;
+  --muted: #efece4;
+  --muted-foreground: #7d6e53;
+  --border: #ddd6c5;
+  --ring: #a99b7a;
+}
+
+.dark {
+  --background: #1a1712;
+  --foreground: #efece4;
+  --card: #3d352c;
+  --card-foreground: #efece4;
+  --muted: #554a3b;
+  --muted-foreground: #c4b99e;
+  --border: #554a3b;
+  --ring: #a99b7a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* 阅读区排版 */
+.story-content p {
+  margin-bottom: 1.35em;
+  text-align: justify;
+  word-break: break-word;
+  text-indent: 2em;
+  line-height: 1.85;
+}
+
+.story-content p:first-of-type {
+  text-indent: 0;
+}
+
+.story-content p:first-of-type::first-letter {
+  font-size: 1.4em;
+  font-weight: 600;
+  color: var(--ring);
+}
+
+.story-content p:last-child {
+  margin-bottom: 0;
+}
+
+/* 隐藏滚动条 */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+/* 入场动画 */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.story-enter {
+  animation: fadeInUp 0.4s ease-out;
+}
+
+/* 按钮微交互 */
+button {
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:active {
+  transform: scale(0.97);
+}
