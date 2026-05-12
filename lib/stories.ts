@@ -1543,7 +1543,7 @@ export const stories: Story[] = [
 
   // ========== 中篇故事（6-8分钟） ==========
   {
-    id: "medium-002",
+    id: "medium-006",
     title: "我妈的广场舞队缺个总指挥",
     tag: "搞笑喜剧",
     category: "comedy",

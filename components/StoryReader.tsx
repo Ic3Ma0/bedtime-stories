@@ -1,17 +1,19 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Story, CATEGORIES } from "@/types/story";
+import { Story, CATEGORIES, StoryCategory } from "@/types/story";
 import { stories, getStoriesByCategory, getRandomStory, findStoryById } from "@/lib/stories";
-import { storage } from "@/lib/storage";
+import { storage, GeneratedStoryRecord } from "@/lib/storage";
 import { speech } from "@/lib/speech";
 
 
 type ViewMode = "list" | "reading";
 
 export default function StoryReader() {
-  const [story, setStory] = useState<Story | null>(null);
-  const [storyList, setStoryList] = useState<Story[]>(stories);
+  type AnyStory = Story | GeneratedStoryRecord;
+  const [story, setStory] = useState<AnyStory | null>(null);
+  const [storyList, setStoryList] = useState<AnyStory[]>(stories);
+  const [generatedStories, setGeneratedStories] = useState<GeneratedStoryRecord[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [favorites, setFavorites] = useState<string[]>([]);
@@ -19,12 +21,17 @@ export default function StoryReader() {
   const [showSettings, setShowSettings] = useState(false);
 
   const [rate, setRate] = useState(0.9);
+  const [fontSize, setFontSize] = useState(18);
+  const [fontFamily, setFontFamily] = useState("sans");
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
 
   const [toasts, setToasts] = useState<{ id: number; msg: string; type: string }[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedDuration, setSelectedDuration] = useState<"short" | "medium" | "long">("short");
+  const [showGenerated, setShowGenerated] = useState(false);
+  const [showFontPicker, setShowFontPicker] = useState(false);
+  const fontPickerRef = useRef<HTMLDivElement>(null);
   const toastIdRef = useRef(0);
 
   const DURATIONS = [
@@ -33,8 +40,8 @@ export default function StoryReader() {
     { key: "long" as const, label: "长故事", emoji: "📚", min: 9, max: 13 },
   ];
 
-  const getFilteredStories = (): Story[] => {
-    let result = stories;
+  const getFilteredStories = (): (Story | GeneratedStoryRecord)[] => {
+    let result: (Story | GeneratedStoryRecord)[] = [...stories, ...generatedStories];
     if (selectedCategory) {
       result = result.filter((s) => s.category === selectedCategory);
     }
@@ -53,7 +60,10 @@ export default function StoryReader() {
       document.documentElement.classList.add("dark");
     }
     setFavorites(storage.getFavorites());
+    setGeneratedStories(storage.getGeneratedStories());
     setRate(speech.getRate());
+    setFontSize(storage.getFontSize());
+    setFontFamily(storage.getFontFamily());
 
     speech.setOnChange(() => {
       setIsSpeaking(speech.isSpeaking);
@@ -69,6 +79,7 @@ export default function StoryReader() {
       if (e.key === "Escape") {
         setShowFavorites(false);
         setShowSettings(false);
+        setShowFontPicker(false);
       }
       if (e.key === " " && viewMode === "reading" && !["INPUT", "TEXTAREA"].includes((e.target as HTMLElement).tagName)) {
         e.preventDefault();
@@ -77,8 +88,32 @@ export default function StoryReader() {
     };
     document.addEventListener("keydown", handleKey);
 
+    // 点击外部关闭字体选择器
+    const handleClickOutside = (e: MouseEvent) => {
+      if (fontPickerRef.current && !fontPickerRef.current.contains(e.target as Node)) {
+        setShowFontPicker(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+
+    // Ctrl/Cmd + 滚轮 调整阅读字体大小
+    const handleWheel = (e: WheelEvent) => {
+      if (viewMode === "reading" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setFontSize((prev) => {
+          const delta = e.deltaY > 0 ? -1 : 1;
+          const next = Math.max(14, Math.min(28, prev + delta));
+          storage.setFontSize(next);
+          return next;
+        });
+      }
+    };
+    document.addEventListener("wheel", handleWheel, { passive: false });
+
     return () => {
       document.removeEventListener("keydown", handleKey);
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("wheel", handleWheel);
     };
   }, [viewMode]);
 
@@ -92,6 +127,7 @@ export default function StoryReader() {
 
   // 选择分类 → 在当前时长下进一步筛选
   const selectCategory = (category: string | null) => {
+    setShowGenerated(false);
     setSelectedCategory(category);
     let result = stories;
     if (selectedDuration) {
@@ -110,6 +146,7 @@ export default function StoryReader() {
 
   // 选择时长 → 切换时长层级
   const selectDuration = (duration: "short" | "medium" | "long") => {
+    setShowGenerated(false);
     setSelectedDuration(duration);
     setSelectedCategory(null);
     const d = DURATIONS.find((x) => x.key === duration)!;
@@ -120,8 +157,18 @@ export default function StoryReader() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  // 切换 AI 创作显示
+  const toggleGenerated = () => {
+    setShowGenerated(true);
+    setSelectedCategory(null);
+    setViewMode("list");
+    setStory(null);
+    speech.stop();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   // 选择故事 → 阅读
-  const selectStory = (s: Story) => {
+  const selectStory = (s: AnyStory) => {
     setStory(s);
     setViewMode("reading");
     speech.stop();
@@ -147,7 +194,7 @@ export default function StoryReader() {
     const pool = getFilteredStories();
     const newStory = pool[Math.floor(Math.random() * pool.length)];
     if (newStory) {
-      setStory(newStory);
+      setStory(newStory as AnyStory);
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   }, [selectedCategory, selectedDuration]);
@@ -186,9 +233,17 @@ export default function StoryReader() {
   };
 
   const openFavStory = (id: string) => {
+    // 先在预制库中查找
     const s = findStoryById(id);
     if (s) {
       selectStory(s);
+      setShowFavorites(false);
+      return;
+    }
+    // 再在生成的故事中查找
+    const g = generatedStories.find((gs) => gs.id === id);
+    if (g) {
+      selectStory(g);
       setShowFavorites(false);
     }
   };
@@ -203,17 +258,15 @@ export default function StoryReader() {
         <h2 className="text-lg font-semibold">
           {currentFilterLabel}
           <span className="ml-2 text-sm font-normal text-muted-foreground">
-            共 {storyList.length} 篇
+            共 {showGenerated ? generatedStories.length : storyList.length} 篇
           </span>
         </h2>
         <button
           onClick={() => {
+            const all = [...generatedStories, ...storyList];
             const pool = selectedCategory
-              ? storyList
-              : stories.filter((x) => {
-                  const d = DURATIONS.find((di) => di.key === selectedDuration)!;
-                  return x.minutes >= d.min && x.minutes <= d.max;
-                });
+              ? all.filter((s) => s.category === selectedCategory)
+              : all;
             const s = pool[Math.floor(Math.random() * pool.length)];
             if (s) selectStory(s);
           }}
@@ -225,28 +278,63 @@ export default function StoryReader() {
       </div>
 
       <div className="grid gap-3">
-        {storyList.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => selectStory(s)}
-            className="flex items-center gap-4 p-4 rounded-xl bg-card border border-border hover:border-ring hover:shadow-sm transition-all text-left group"
-          >
-            <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center text-xl shrink-0 group-hover:scale-110 transition-transform">
-              {CATEGORIES.find((c) => c.key === s.category)?.emoji || "📖"}
+        {showGenerated ? (
+          /* 仅显示 AI 创作 */
+          generatedStories.length > 0 ? (
+            generatedStories.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => selectStory(s)}
+                className="flex items-center gap-4 p-4 rounded-xl bg-card border border-ring/40 hover:border-ring hover:shadow-sm transition-all text-left group"
+              >
+                <div className="w-12 h-12 rounded-xl bg-ring/10 flex items-center justify-center text-xl shrink-0 group-hover:scale-110 transition-transform">
+                  ✨
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-medium text-foreground truncate group-hover:text-ring transition-colors">
+                    {s.title}
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    <span className="text-ring font-medium">{s.tag}</span> · 约{s.minutes}分钟
+                  </p>
+                </div>
+                <div className="text-muted-foreground">
+                  <ChevronRightIcon />
+                </div>
+              </button>
+            ))
+          ) : (
+            <div className="text-center py-12 text-muted-foreground">
+              <p className="text-2xl mb-3">✨</p>
+              <p>还没有 AI 创作的故事</p>
+              <p className="text-sm mt-1">去"创作"页面生成你的第一个故事吧</p>
             </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="font-medium text-foreground truncate group-hover:text-ring transition-colors">
-                {s.title}
-              </h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {s.tag} · 约{s.minutes}分钟
-              </p>
-            </div>
-            <div className="text-muted-foreground">
-              <ChevronRightIcon />
-            </div>
-          </button>
-        ))}
+          )
+        ) : (
+          /* 仅显示预制故事库 */
+          storyList.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => selectStory(s)}
+              className="flex items-center gap-4 p-4 rounded-xl bg-card border border-border hover:border-ring hover:shadow-sm transition-all text-left group"
+            >
+              <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center text-xl shrink-0 group-hover:scale-110 transition-transform">
+                {CATEGORIES.find((c) => c.key === s.category)?.emoji || "📖"}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-medium text-foreground truncate group-hover:text-ring transition-colors">
+                  {s.title}
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {s.tag} · 约{s.minutes}分钟
+                </p>
+              </div>
+              <div className="text-muted-foreground">
+                <ChevronRightIcon />
+              </div>
+            </button>
+          ))
+        )}
       </div>
     </div>
   );
@@ -255,15 +343,59 @@ export default function StoryReader() {
   const renderReadingView = () => {
     if (!story) return null;
     return (
-      <article className="bg-card rounded-2xl shadow-sm border border-border p-6 md:p-8 min-h-[50vh] story-enter">
-        {/* 返回按钮 */}
-        <button
-          onClick={backToList}
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
-        >
-          <ArrowLeftIcon />
-          返回{currentFilterLabel}列表
-        </button>
+      <div className="relative">
+        {/* 字体选择器 - 卡片右上方外部 */}
+        <div className="absolute -top-2 right-2 md:-right-2 z-10" ref={fontPickerRef}>
+          <button
+            onClick={() => setShowFontPicker(!showFontPicker)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-base font-medium bg-card border border-border shadow-sm text-muted-foreground hover:text-foreground hover:shadow-md transition-all"
+          >
+            <span className="text-lg">🅰️</span>
+            <span className="hidden sm:inline">字体</span>
+          </button>
+          {showFontPicker && (
+            <div className="absolute right-0 top-full mt-2 w-32 bg-card rounded-xl shadow-xl border border-border z-50 overflow-hidden py-1">
+              {[
+                { key: "sans", label: "黑体" },
+                { key: "serif", label: "宋体" },
+                { key: "kai", label: "楷体" },
+              ].map((f) => (
+                <button
+                  key={f.key}
+                  onClick={() => {
+                    setFontFamily(f.key);
+                    storage.setFontFamily(f.key);
+                    setShowFontPicker(false);
+                  }}
+                  className={`w-full text-left px-4 py-2.5 text-base transition-colors ${
+                    fontFamily === f.key
+                      ? "bg-muted text-foreground font-medium"
+                      : "text-muted-foreground hover:bg-muted/50"
+                  }`}
+                  style={{
+                    fontFamily:
+                      f.key === "sans"
+                        ? "ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif"
+                        : f.key === "serif"
+                        ? "ui-serif, Georgia, 'SimSun', 'Songti SC', serif"
+                        : "'KaiTi', 'Kaiti SC', 'STKaiti', serif",
+                  }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <article className="bg-card rounded-2xl shadow-sm border border-border p-6 md:p-8 min-h-[50vh] story-enter">
+          <button
+            onClick={backToList}
+            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
+          >
+            <ArrowLeftIcon />
+            返回{currentFilterLabel}列表
+          </button>
 
         <div className="mb-6 pb-4 border-b border-border">
           <div className="flex items-center gap-2 mb-2 flex-wrap">
@@ -275,16 +407,27 @@ export default function StoryReader() {
           <h2 className="text-2xl md:text-3xl font-bold leading-tight">{story.title}</h2>
         </div>
         <div
-          className="story-content text-base md:text-lg text-card-foreground"
+          className="story-content text-card-foreground leading-relaxed"
+          style={{
+            fontSize: `${fontSize}px`,
+            lineHeight: 1.8,
+            fontFamily:
+              fontFamily === "sans"
+                ? "ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif"
+                : fontFamily === "serif"
+                ? "ui-serif, Georgia, 'SimSun', 'Songti SC', serif"
+                : "'KaiTi', 'Kaiti SC', 'STKaiti', serif",
+          }}
           dangerouslySetInnerHTML={{
             __html: story.content
               .split("\n")
               .filter((p) => p.trim())
-              .map((p) => `<p>${escapeHtml(p.trim())}</p>`)
+              .map((p) => `<p style="margin-bottom:1em;text-indent:2em;">${escapeHtml(p.trim())}</p>`)
               .join(""),
           }}
         />
       </article>
+    </div>
     );
   };
 
@@ -296,7 +439,7 @@ export default function StoryReader() {
           <div
             key={t.id}
             className={`px-4 py-2.5 rounded-xl shadow-lg text-sm font-medium text-white animate-in fade-in slide-in-from-top-2 duration-300 ${
-              t.type === "success" ? "bg-green-500" : t.type === "error" ? "bg-red-500" : "bg-night-800"
+              t.type === "success" ? "bg-green-500" : t.type === "error" ? "bg-red-500" : "bg-slate-800 dark:bg-slate-700"
             }`}
           >
             {t.msg}
@@ -304,39 +447,32 @@ export default function StoryReader() {
         ))}
       </div>
 
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-card/80 dark:bg-card/80 backdrop-blur-md border-b border-border">
-        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">🌙</span>
-            <h1 className="text-lg font-semibold tracking-wide">枕边故事</h1>
-          </div>
-          <div className="flex items-center gap-1">
+      {/* Main */}
+      <div className={`flex flex-1 max-w-5xl w-full mx-auto px-4 py-6 gap-6 ${viewMode === "reading" ? "pb-28" : "pb-6"}`}>
+        {/* 左侧边栏 - 桌面端 */}
+        <aside className="hidden md:flex flex-col w-44 shrink-0">
+          {/* 顶部工具栏 */}
+          <div className="flex items-center gap-2 mb-4 px-2">
             <button
               onClick={() => setShowFavorites(true)}
-              className="p-2 rounded-lg hover:bg-muted transition-colors relative"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm text-muted-foreground hover:bg-muted transition-colors relative"
             >
               <BookmarkIcon />
+              <span>收藏</span>
               {favorites.length > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 text-[10px] bg-red-500 text-white rounded-full flex items-center justify-center">
+                <span className="ml-1 w-4 h-4 text-[10px] bg-red-500 text-white rounded-full flex items-center justify-center">
                   {favorites.length}
                 </span>
               )}
             </button>
             <button
               onClick={toggleTheme}
-              className="p-2 rounded-lg hover:bg-muted transition-colors"
+              className="p-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
             >
               {theme === "dark" ? <SunIcon /> : <MoonIcon />}
             </button>
           </div>
-        </div>
-      </header>
 
-      {/* Main */}
-      <main className="flex flex-1 max-w-5xl w-full mx-auto px-4 py-6 pb-28 gap-6">
-        {/* 左侧边栏 - 桌面端 */}
-        <aside className="hidden md:flex flex-col w-44 shrink-0">
           {/* 故事时长分组 */}
           <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 px-2">
             故事时长
@@ -349,7 +485,7 @@ export default function StoryReader() {
                   key={d.key}
                   onClick={() => selectDuration(d.key)}
                   className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-colors text-left ${
-                    selectedDuration === d.key && viewMode === "list"
+                    selectedDuration === d.key && viewMode === "list" && !showGenerated
                       ? "bg-foreground text-background font-medium"
                       : "text-muted-foreground hover:bg-muted"
                   }`}
@@ -360,6 +496,19 @@ export default function StoryReader() {
                 </button>
               );
             })}
+            {/* AI 创作入口 */}
+            <button
+              onClick={toggleGenerated}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-colors text-left ${
+                showGenerated && viewMode === "list"
+                  ? "bg-foreground text-background font-medium"
+                  : "text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              <span className="text-base">✨</span>
+              <span>我的创作</span>
+              <span className="ml-auto text-xs opacity-60">{generatedStories.length}</span>
+            </button>
           </nav>
 
           {/* 故事主题分组 */}
@@ -433,12 +582,36 @@ export default function StoryReader() {
 
         {/* 右侧主内容 */}
         <div className="flex-1 min-w-0">
+          {/* 移动端工具栏 */}
+          <div className="md:hidden flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowFavorites(true)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm text-muted-foreground hover:bg-muted transition-colors relative"
+              >
+                <BookmarkIcon />
+                <span>收藏</span>
+                {favorites.length > 0 && (
+                  <span className="ml-1 w-4 h-4 text-[10px] bg-red-500 text-white rounded-full flex items-center justify-center">
+                    {favorites.length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={toggleTheme}
+                className="p-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
+              >
+                {theme === "dark" ? <SunIcon /> : <MoonIcon />}
+              </button>
+            </div>
+          </div>
+
           {/* 移动端主题筛选 */}
           <div className="md:hidden flex gap-2 overflow-x-auto pb-3 mb-4 scrollbar-hide">
             <button
               onClick={() => selectCategory(null)}
               className={`shrink-0 px-3 py-1.5 rounded-full text-sm transition-colors ${
-                selectedCategory === null
+                selectedCategory === null && !showGenerated
                   ? "bg-foreground text-background"
                   : "bg-muted text-muted-foreground hover:bg-muted/80"
               }`}
@@ -465,58 +638,64 @@ export default function StoryReader() {
                 </button>
               );
             })}
+            {generatedStories.length > 0 && (
+              <button
+                onClick={toggleGenerated}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-sm transition-colors ${
+                  showGenerated
+                    ? "bg-foreground text-background"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                ✨ 我的创作
+              </button>
+            )}
           </div>
 
           {/* 内容区域 */}
           {viewMode === "list" ? renderListView() : renderReadingView()}
         </div>
-      </main>
-
-      {/* Bottom Bar - 仅在阅读模式显示完整操作栏 */}
-      <div className="fixed bottom-0 left-0 right-0 bg-card/90 backdrop-blur-md border-t border-border z-40">
-        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between gap-2">
-          {viewMode === "reading" && story ? (
-            <>
-              <button
-                onClick={toggleFavorite}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl transition-colors ${
-                  isFav ? "text-red-500" : "text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                <HeartIcon filled={isFav} />
-                <span className="text-sm hidden sm:inline">{isFav ? "已收藏" : "收藏"}</span>
-              </button>
-              <button
-                onClick={toggleSpeech}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
-              >
-                {isSpeaking && !isPaused ? <PauseIcon /> : isPaused ? <PlayIcon /> : <VolumeIcon />}
-                <span className="text-sm hidden sm:inline">
-                  {isSpeaking && !isPaused ? "暂停" : isPaused ? "继续" : "朗读"}
-                </span>
-              </button>
-              <button
-                onClick={() => setShowSettings(true)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
-              >
-                <SettingsIcon />
-                <span className="text-sm hidden sm:inline">设置</span>
-              </button>
-              <button
-                onClick={nextStory}
-                className="flex-1 flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-foreground text-background font-medium hover:opacity-90 transition-opacity"
-              >
-                <ShuffleIcon />
-                <span>换一篇</span>
-              </button>
-            </>
-          ) : (
-            <div className="flex-1 text-center text-sm text-muted-foreground">
-              点击故事开始阅读
-            </div>
-          )}
-        </div>
       </div>
+
+      {/* Bottom Bar - 仅在阅读模式显示 */}
+      {viewMode === "reading" && story && (
+        <div className="fixed bottom-0 left-0 right-0 bg-card/90 backdrop-blur-md border-t border-border z-40">
+          <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between gap-2">
+            <button
+              onClick={toggleFavorite}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl transition-colors ${
+                isFav ? "text-red-500" : "text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              <HeartIcon filled={isFav} />
+              <span className="text-sm hidden sm:inline">{isFav ? "已收藏" : "收藏"}</span>
+            </button>
+            <button
+              onClick={toggleSpeech}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
+            >
+              {isSpeaking && !isPaused ? <PauseIcon /> : isPaused ? <PlayIcon /> : <VolumeIcon />}
+              <span className="text-sm hidden sm:inline">
+                {isSpeaking && !isPaused ? "暂停" : isPaused ? "继续" : "朗读"}
+              </span>
+            </button>
+            <button
+              onClick={() => setShowSettings(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
+            >
+              <SettingsIcon />
+              <span className="text-sm hidden sm:inline">设置</span>
+            </button>
+            <button
+              onClick={nextStory}
+              className="flex-1 flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-foreground text-background font-medium hover:opacity-90 transition-opacity"
+            >
+              <ShuffleIcon />
+              <span>换一篇</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Favorites Modal */}
       {showFavorites && (
@@ -577,12 +756,16 @@ export default function StoryReader() {
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowSettings(false)} />
           <div className="absolute bottom-0 inset-x-0 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[480px] bg-card rounded-t-2xl md:rounded-2xl shadow-2xl border-t md:border border-border p-6">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold">朗读设置</h3>
+              <h3 className="text-lg font-semibold">阅读设置</h3>
               <button onClick={() => setShowSettings(false)} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
                 <CloseIcon />
               </button>
             </div>
             <div className="space-y-4">
+              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-muted text-sm text-muted-foreground">
+                <span>💡</span>
+                <span>阅读时按住 <kbd className="px-1.5 py-0.5 rounded bg-card text-xs font-mono border border-border">Ctrl</kbd> + 滚轮可调整字体大小</span>
+              </div>
               <div>
                 <label className="flex items-center justify-between text-sm mb-2">
                   <span>语速</span>
